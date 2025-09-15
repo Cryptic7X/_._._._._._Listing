@@ -57,10 +57,14 @@ class CoinMarketCalClient:
             
             # Process events
             for event in data.get('body', []):
-                if self.is_exchange_listing(event):
-                    listing = self.parse_listing_event(event)
-                    if listing and self.is_priority_exchange(listing.get('exchange', '')):
-                        listings.append(listing)
+                try:
+                    if self.is_exchange_listing(event):
+                        listing = self.parse_listing_event(event)
+                        if listing and self.is_priority_exchange(listing.get('exchange', '')):
+                            listings.append(listing)
+                except Exception as e:
+                    logger.error(f"Error processing event {event.get('id', 'unknown')}: {e}")
+                    continue
             
             # Sort by priority (Binance first, then Coinbase, etc.)
             listings.sort(key=lambda x: self.get_exchange_priority(x.get('exchange', '')))
@@ -72,32 +76,53 @@ class CoinMarketCalClient:
         
         return listings
     
+    def safe_get_text(self, field):
+        """Safely extract text from field that might be string or dict"""
+        if isinstance(field, dict):
+            # Try common text fields in dict
+            for key in ['text', 'content', 'description', 'value']:
+                if key in field and isinstance(field[key], str):
+                    return field[key]
+            # If no text found, convert dict to string
+            return str(field)
+        elif isinstance(field, str):
+            return field
+        else:
+            return str(field) if field else ''
+    
     def is_exchange_listing(self, event):
         """Check if event is an exchange listing"""
-        title = event.get('title', '').lower()
-        description = event.get('description', '').lower()
-        
-        listing_keywords = [
-            'listing',
-            'will list',
-            'lists',
-            'trading pair',
-            'available for trading',
-            'spot trading',
-            'perpetual',
-            'futures'
-        ]
-        
-        # Check title and description for listing keywords
-        text_to_check = f"{title} {description}"
-        
-        return any(keyword in text_to_check for keyword in listing_keywords)
+        try:
+            title = self.safe_get_text(event.get('title', ''))
+            description = self.safe_get_text(event.get('description', ''))
+            
+            listing_keywords = [
+                'listing',
+                'will list',
+                'lists',
+                'trading pair',
+                'available for trading',
+                'spot trading',
+                'perpetual',
+                'futures',
+                'new coin',
+                'trading starts'
+            ]
+            
+            # Check title and description for listing keywords
+            text_to_check = f"{title} {description}".lower()
+            
+            return any(keyword in text_to_check for keyword in listing_keywords)
+            
+        except Exception as e:
+            logger.error(f"Error checking if event is exchange listing: {e}")
+            return False
     
     def parse_listing_event(self, event):
         """Parse CoinMarketCal event into listing format"""
         try:
-            title = event.get('title', '')
-            description = event.get('description', '')
+            title = self.safe_get_text(event.get('title', ''))
+            description = self.safe_get_text(event.get('description', ''))
             
             # Extract exchange name from title/description
             exchange = self.extract_exchange_name(f"{title} {description}")
@@ -107,7 +132,12 @@ class CoinMarketCalClient:
             if not tokens:
                 tokens = self.extract_tokens(description)
             
-            if not tokens or not exchange:
+            if not tokens:
+                logger.debug(f"No tokens found in event: {title}")
+                return None
+                
+            if not exchange:
+                logger.debug(f"No priority exchange found in event: {title}")
                 return None
             
             # Use first token found
@@ -152,7 +182,8 @@ class CoinMarketCalClient:
         # Check for exchange names (order matters - check longer names first)
         exchanges = [
             'coinbase pro', 'coinbase', 'binance', 'bybit', 'kraken',
-            'kucoin', 'huobi', 'okx', 'gate.io', 'bitget', 'mexc'
+            'kucoin', 'huobi', 'okx', 'gate.io', 'bitget', 'mexc',
+            'bitmart', 'ascendex', 'gate'
         ]
         
         for exchange in exchanges:
@@ -164,6 +195,9 @@ class CoinMarketCalClient:
     def extract_tokens(self, text):
         """Extract token symbols from text"""
         import re
+        
+        if not text:
+            return []
         
         # Look for token patterns
         patterns = [
@@ -180,7 +214,8 @@ class CoinMarketCalClient:
         # Filter out common false positives
         false_positives = {
             'USD', 'EUR', 'GBP', 'BTC', 'ETH', 'USDT', 'USDC', 
-            'API', 'NEW', 'THE', 'AND', 'FOR', 'UTC', 'GMT', 'UTC'
+            'API', 'NEW', 'THE', 'AND', 'FOR', 'UTC', 'GMT', 'UTC',
+            'ALL', 'GET', 'SET', 'PUT', 'POST', 'HTTP', 'HTTPS'
         }
         
         # Keep tokens that are 2-6 characters and not false positives
@@ -194,6 +229,9 @@ class CoinMarketCalClient:
     def extract_trading_pairs(self, text, token):
         """Extract trading pairs from text"""
         import re
+        
+        if not text or not token:
+            return [f"{token}/USDT"] if token else []
         
         pairs = []
         text_upper = text.upper()
@@ -214,14 +252,20 @@ class CoinMarketCalClient:
     
     def is_priority_exchange(self, exchange):
         """Check if exchange is in our priority list"""
+        if not exchange:
+            return False
         return exchange.lower() in self.priority_exchanges
     
     def get_exchange_priority(self, exchange):
         """Get priority number for sorting"""
+        if not exchange:
+            return 999
         return self.priority_exchanges.get(exchange.lower(), {}).get('priority', 999)
     
     def get_exchange_info(self, exchange):
         """Get exchange emoji and impact info"""
+        if not exchange:
+            return {'emoji': '📊', 'impact': 'Exchange listing'}
         return self.priority_exchanges.get(exchange.lower(), {
             'emoji': '📊',
             'impact': 'Exchange listing'
