@@ -1,0 +1,50 @@
+name: Crypto Listing Monitor
+
+on:
+  schedule:
+    # Run every 3 hours
+    - cron: '0 */3 * * *'
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  monitor-listings:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Cache previous data
+      uses: actions/cache@v4
+      with:
+        path: cache/
+        key: listings-cache-${{ github.run_id }}
+        restore-keys: |
+          listings-cache-
+    
+    - name: Create cache directory
+      run: mkdir -p cache
+    
+    - name: Run listing monitor
+      env:
+        COINMARKETCAL_API_KEY: ${{ secrets.COINMARKETCAL_API_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+      run: python src/monitor.py
+    
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: error-logs
+        path: logs/
