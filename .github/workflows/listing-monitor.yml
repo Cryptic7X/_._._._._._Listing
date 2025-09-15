@@ -25,7 +25,7 @@ jobs:
         pip install -r requirements.txt
     
     - name: Cache previous data
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: cache/
         key: listings-cache-${{ github.run_id }}
@@ -43,7 +43,7 @@ jobs:
     
     - name: Upload logs on failure
       if: failure()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: error-logs
         path: logs/
